@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "68114102190",
+    "project_id": "dietmate-8a156",
+    "storage_bucket": "dietmate-8a156.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:68114102190:android:2f7a93a50ecabfd03f3a3f",
+        "android_client_info": {
+          "package_name": "com.example.recipeapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAViXMgxorxxar5UVhdK0uYgAXLXXUqb5M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
