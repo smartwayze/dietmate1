@@ -7,6 +7,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'ProfileCompletionScreen.dart';
 import 'RecipeSuggestionsScreen.dart';
 import 'AI-Based Recipe Rating System.dart';
+
 class DynamicHomeScreen extends StatefulWidget {
   const DynamicHomeScreen({super.key});
 
@@ -19,6 +20,7 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
   final CarouselController _carouselController = CarouselController();
   late Stream<QuerySnapshot> _completedActivitiesStream;
   late Stream<QuerySnapshot> _completedMealsStream;
+  late Stream<QuerySnapshot> _favoriteRecipesStream;
 
   @override
   void initState() {
@@ -30,14 +32,20 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
           .doc(user.uid)
           .collection('completedActivities')
           .orderBy('completedAt', descending: true)
-          .snapshots(); // Remove the limit(10)
+          .snapshots();
 
       _completedMealsStream = FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
           .collection('completedMeals')
           .orderBy('completedAt', descending: true)
-          .snapshots(); // Remove the limit(10)
+          .snapshots();
+
+      _favoriteRecipesStream = FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('favoriteRecipes')
+          .snapshots();
     }
   }
 
@@ -80,6 +88,13 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
             backgroundColor: Colors.green.shade300,
             iconTheme: const IconThemeData(color: Colors.white),
             automaticallyImplyLeading: false,
+            actions: [
+              if (_currentIndex == 1) // Recipes tab
+                IconButton(
+                  icon: const Icon(Icons.search),
+                  onPressed: () => _showRecipeSearch(userProfile),
+                ),
+            ],
           ),
           body: IndexedStack(
             index: _currentIndex,
@@ -88,7 +103,7 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
               _buildHomeTab(userProfile, user),
 
               // Recipes Tab
-              RealTimeRecipeGenerator(userId: user.uid),
+              _buildRecipesTab(userProfile),
 
               // Progress Tab
               _buildProgressTab(userProfile),
@@ -126,7 +141,231 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
       },
     );
   }
+  void _showRecipeDetails(Recipe recipe, UserProfile profile) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      recipe.name,
+                      style: const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        recipe.isFavorite ? Icons.favorite : Icons.favorite_border,
+                        color: recipe.isFavorite ? Colors.red : Colors.grey,
+                      ),
+                      onPressed: () {
+                        _toggleFavorite(recipe);
+                        Navigator.pop(context);
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  recipe.description,
+                  style: const TextStyle(fontSize: 16),
+                ),
+                const SizedBox(height: 16),
 
+                // Recipe Image with fallback to asset image
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    height: 200,
+                    width: double.infinity,
+                    child: recipe.imageUrl != null && recipe.imageUrl!.isNotEmpty
+                        ? Image.network(
+                      recipe.imageUrl!,
+                      height: 200,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) => _buildRecipeAssetImage(recipe),
+                    )
+                        : _buildRecipeAssetImage(recipe),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Quick Info
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _buildRecipeInfoItem(Icons.timer, '${recipe.prepTime} min'),
+                    _buildRecipeInfoItem(Icons.local_fire_department, '${recipe.calories} cal'),
+                    _buildRecipeInfoItem(Icons.people, '2 servings'),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                // Nutritional Information
+                const Text(
+                  'Nutritional Information (per serving)',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                if (recipe.nutritionalInfo != null)
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _buildNutritionChip('Protein', '${recipe.nutritionalInfo!['protein']}g'),
+                      _buildNutritionChip('Carbs', '${recipe.nutritionalInfo!['carbs']}g'),
+                      _buildNutritionChip('Fats', '${recipe.nutritionalInfo!['fats']}g'),
+                      _buildNutritionChip('Fiber', '${recipe.nutritionalInfo!['fiber']}g'),
+                      _buildNutritionChip('Sugar', '${recipe.nutritionalInfo!['sugar']}g'),
+                    ],
+                  ),
+                const SizedBox(height: 16),
+
+                // Ingredients
+                const Text(
+                  'Ingredients',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                ...recipe.ingredients.map((ingredient) =>
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Text('• $ingredient'),
+                    ),
+                ),
+                const SizedBox(height: 16),
+
+                // Possible Substitutions
+                if (recipe.possibleSubstitutions != null && recipe.possibleSubstitutions!.isNotEmpty)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Suggested Substitutions',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      ...recipe.possibleSubstitutions!.map((sub) =>
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Text('• $sub'),
+                          ),
+                      ),
+                    ],
+                  ),
+                const SizedBox(height: 16),
+
+                // Instructions
+                const Text(
+                  'Instructions',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                ...recipe.instructions.asMap().entries.map((entry) =>
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: 24,
+                            height: 24,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: Colors.green.shade300,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Text(
+                              '${entry.key + 1}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(entry.value),
+                          ),
+                        ],
+                      ),
+                    ),
+                ),
+                const SizedBox(height: 16),
+
+                // Tags
+                Wrap(
+                  spacing: 8,
+                  children: recipe.tags.map((tag) => Chip(
+                    label: Text(tag),
+                    backgroundColor: Colors.green.shade100,
+                  )).toList(),
+                ),
+                const SizedBox(height: 32),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildRecipeAssetImage(Recipe recipe) {
+    return Image.asset(
+      recipe.assetPath,
+      height: 200,
+      width: double.infinity,
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) => Container(
+        height: 200,
+        color: Colors.grey[200],
+        child: const Center(
+          child: Icon(Icons.fastfood, size: 50, color: Colors.grey),
+        ),
+      ),
+    );
+  }
+  Widget _buildRecipeInfoItem(IconData icon, String text) {
+    return Column(
+      children: [
+        Icon(icon, size: 24, color: Colors.green.shade300),
+        const SizedBox(height: 4),
+        Text(text),
+      ],
+    );
+  }
+
+  Widget _buildNutritionChip(String label, String value) {
+    return Chip(
+      label: Text('$label: $value'),
+      backgroundColor: Colors.green.shade50,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+      ),
+    );
+  }
   Widget _buildHomeTab(UserProfile profile, User user) {
     return SingleChildScrollView(
       child: Column(
@@ -138,14 +377,117 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
           _buildSectionTitle('Your Activity Plan'),
           _buildActivitySliderWithImages(profile),
           const SizedBox(height: 20),
-          _buildSectionTitle('Recommended Diet'),
+          _buildSectionTitle('Recommended Diet Plan'),
           _buildDietPlan(profile),
+          const SizedBox(height: 20),
+          _buildSectionTitle('Featured Recipes'),
+          _buildFeaturedRecipes(profile),
         ],
       ),
     );
   }
 
-  // Home Tab Widgets
+  Widget _buildRecipesTab(UserProfile profile) {
+    return DefaultTabController(
+      length: 3,
+      child: Scaffold(
+        appBar: AppBar(
+          automaticallyImplyLeading: false,
+          title: const Text('Recipe Suggestions'),
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: 'Recommended'),
+              Tab(text: 'Favorites'),
+              Tab(text: 'Categories'),
+            ],
+          ),
+        ),
+        body: TabBarView(
+          children: [
+            _buildRecommendedRecipes(profile),
+            _buildFavoriteRecipes(),
+            _buildRecipeCategories(profile),
+          ],
+        ),
+        floatingActionButton: FloatingActionButton(
+          onPressed: () => _showAddRecipeDialog(profile),
+          backgroundColor: Colors.green.shade300,
+          child: const Icon(Icons.add, color: Colors.white),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProgressTab(UserProfile profile) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        children: [
+          const Text(
+            'Your Progress Overview',
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: Colors.green,
+            ),
+          ),
+          const SizedBox(height: 20),
+          _buildWeeklySummaryCards(),
+          const SizedBox(height: 20),
+          _buildActivityProgressChart(),
+          const SizedBox(height: 20),
+          _buildNutritionProgressChart(),
+          const SizedBox(height: 20),
+          _buildRecentActivitiesSection(),
+          const SizedBox(height: 20),
+          _buildRecentMealsSection(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSettingsTab(UserProfile profile) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text(
+          'Profile Settings',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 20),
+        ListTile(
+          leading: const Icon(Icons.person),
+          title: const Text('View Profile'),
+          onTap: () => _showProfileDetails(profile),
+        ),
+        const Divider(),
+        ListTile(
+          leading: const Icon(Icons.edit),
+          title: const Text('Edit Profile'),
+          onTap: () => _editProfile(profile),
+        ),
+        const Divider(),
+        ListTile(
+          leading: const Icon(Icons.delete, color: Colors.red),
+          title: const Text(
+            'Delete Profile',
+            style: TextStyle(color: Colors.red),
+          ),
+          onTap: () => _confirmDeleteProfile(),
+        ),
+        const Divider(),
+        ListTile(
+          leading: const Icon(Icons.logout),
+          title: const Text('Logout'),
+          onTap: () => _logout(),
+        ),
+      ],
+    );
+  }
+
   Widget _buildSectionTitle(String title) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -273,7 +615,6 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
   }
 
   Widget _buildGoalsCard(UserProfile profile) {
-    // Define all possible goals with their colors
     final goalColors = {
       'Weight loss': Colors.red.shade300,
       'Muscle gain': Colors.blue.shade300,
@@ -328,7 +669,6 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
   }
 
   Widget _buildActivitySliderWithImages(UserProfile profile) {
-    // Define all possible activities with their images
     final activityBank = [
       Activity(
         id: 'hiit',
@@ -413,10 +753,8 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
       ),
     ];
 
-    // Filter activities based on user's goals and conditions
     final List<Activity> displayActivities = [];
 
-    // First priority: Activities that match specific health conditions
     if (profile.conditions.contains('Arthritis') ||
         profile.conditions.contains('Joint pain')) {
       displayActivities.addAll([
@@ -424,9 +762,7 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
         activityBank.firstWhere((a) => a.id == 'yoga'),
         activityBank.firstWhere((a) => a.id == 'walking'),
       ]);
-    }
-    // Second priority: Activities that match goals
-    else {
+    } else {
       for (final goal in profile.goals) {
         if (goal.toLowerCase().contains('weight loss')) {
           displayActivities.addAll([
@@ -457,10 +793,8 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
       }
     }
 
-    // Remove duplicates
     displayActivities.toSet().toList();
 
-    // If no matches, use default set
     if (displayActivities.isEmpty) {
       displayActivities.addAll([
         activityBank.firstWhere((a) => a.id == 'walking'),
@@ -599,10 +933,10 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
     final diets = _getRecommendedDiets(profile);
 
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-      child: Column(
-        children: [
-          Card(
+        margin: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+        child: Column(
+            children: [
+            Card(
             elevation: 4,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
@@ -612,154 +946,422 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Center(
-                    child: Text(
-                      'Today\'s Meal Plan',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
+              const Center(
+              child: Text(
+              'Today\'s AI-Generated Meal Plan',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            ...diets.map((diet) => GestureDetector(
+        onTap: () => _showMealDetailsWithNutrition(diet, profile),
+    child: Padding(
+    padding: const EdgeInsets.symmetric(vertical: 10),
+    child: Container(
+    decoration: BoxDecoration(
+    borderRadius: BorderRadius.circular(12),
+    color: Colors.green.shade50,
+    ),
+    padding: const EdgeInsets.all(12),
+    child: Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+    Container(
+    width: 8,
+    height: 8,
+    margin: const EdgeInsets.only(top: 6, right: 12),
+    decoration: BoxDecoration(
+    color: Colors.green.shade300,
+    shape: BoxShape.circle,
+    ),
+    ),
+    Expanded(
+    child: Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+    Text(
+    diet.mealTime,
+    style: const TextStyle(
+    fontWeight: FontWeight.bold,
+    fontSize: 16,
+    ),
+    ),
+    const SizedBox(height: 4),
+    Text(diet.description),
+    const SizedBox(height: 4),
+    if (diet.nutritionalInfo != null)
+    Text(
+    '${diet.calories} cal • ${diet.nutritionalInfo!['protein']}g protein • ${diet.nutritionalInfo!['carbs']}g carbs',
+    style: TextStyle(
+    color: Colors.grey.shade600,
+    fontSize: 12,
+    ),
+    )
+    else
+    Text(
+    '${diet.calories} calories',
+    style: TextStyle(
+    color: Colors.grey.shade600,
+    fontSize: 12,
+    ),
+    ),
+    ],
+    ),
+    ),
+    Icon(
+    Icons.arrow_forward_ios,
+    size: 16,
+    color: Colors.grey.shade500,
+    ),
+    ],
+    ),
+    ),
+    ),
+    )).toList(),
+    const SizedBox(height: 16),
+    Center(
+    child: ElevatedButton.icon(
+    icon: const Icon(Icons.autorenew),
+    label: const Text('Generate New Meal Plan'),
+    style: ElevatedButton.styleFrom(
+    backgroundColor: Colors.green.shade300,
+    foregroundColor: Colors.white,
+    ),
+    onPressed: () {
+    setState(() {});
+    },
+    ),
+    ),
+    ],
+    ),
+    ),
+    ),
+    StreamBuilder<QuerySnapshot>(
+    stream: _completedMealsStream,
+    builder: (context, snapshot) {
+    if (!snapshot.hasData) {
+    return const SizedBox();
+    }
+    final today = DateTime.now();
+    final todayMeals = snapshot.data!.docs.where((doc) {
+    final timestamp = doc['completedAt'] as Timestamp?;
+    if (timestamp == null) return false;
+    final date = timestamp.toDate();
+    return date.year == today.year &&
+    date.month == today.month &&
+    date.day == today.day;
+    }).length;
+
+    return Row(
+    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    children: [
+    Text(
+    'Today: $todayMeals/${diets.length} meals completed',
+    style: TextStyle(
+    color: todayMeals >= diets.length
+    ? Colors.green.shade700
+        : Colors.orange.shade700,
+    fontWeight: FontWeight.bold,
+    ),
+    ),
+    Text(
+    '${_calculateTotalCalories(diets)} total calories',
+    style: TextStyle(
+    color: Colors.grey.shade600,
+    ),
+    ),
+    ],
+    );
+    },
+    ),
+    ],
+    ),
+    );
+    }
+
+  Widget _buildFeaturedRecipes(UserProfile profile) {
+    final featuredRecipes = _getRecommendedRecipes(profile).take(3).toList();
+
+    return CarouselSlider(
+      items: featuredRecipes.map((recipe) {
+        return GestureDetector(
+          onTap: () => _showRecipeDetails(recipe, profile),
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 0), // Remove horizontal margin
+            width: double.infinity, // Take full available width
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              image: DecorationImage(
+                image: _getFeaturedRecipeImageProvider(recipe),
+                fit: BoxFit.cover,
+                colorFilter: ColorFilter.mode(
+                  Colors.black.withOpacity(0.3),
+                  BlendMode.darken,
+                ),
+              ),
+            ),
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                gradient: LinearGradient(
+                  begin: Alignment.bottomCenter,
+                  end: Alignment.topCenter,
+                  colors: [
+                    Colors.black.withOpacity(0.7),
+                    Colors.transparent,
+                  ],
+                ),
+              ),
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.end,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    recipe.name,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  ...diets.map((diet) => GestureDetector(
-                    onTap: () => _showMealDetails(diet, profile),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(12),
-                          color: Colors.green.shade50,
-                        ),
-                        padding: const EdgeInsets.all(12),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              width: 8,
-                              height: 8,
-                              margin: const EdgeInsets.only(top: 6, right: 12),
-                              decoration: BoxDecoration(
-                                color: Colors.green.shade300,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    diet.mealTime,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(diet.description),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    '${diet.calories} calories',
-                                    style: TextStyle(
-                                      color: Colors.grey.shade600,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Icon(
-                              Icons.arrow_forward_ios,
-                              size: 16,
-                              color: Colors.grey.shade500,
-                            ),
-                          ],
-                        ),
-                      ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${recipe.calories} cal • ${recipe.prepTime} min',
+                    style: const TextStyle(
+                      color: Colors.white,
                     ),
-                  )).toList(),
+                  ),
                 ],
               ),
             ),
           ),
-          StreamBuilder<QuerySnapshot>(
-            stream: _completedMealsStream,
-            builder: (context, snapshot) {
-              if (!snapshot.hasData) {
-                return const SizedBox();
-              }
-              final today = DateTime.now();
-              final todayMeals = snapshot.data!.docs.where((doc) {
-                final timestamp = doc['completedAt'] as Timestamp?;
-                if (timestamp == null) return false;
-                final date = timestamp.toDate();
-                return date.year == today.year &&
-                    date.month == today.month &&
-                    date.day == today.day;
-              }).length;
-
-              return Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Today: $todayMeals/${diets.length} meals completed',
-                    style: TextStyle(
-                      color: todayMeals >= diets.length
-                          ? Colors.green.shade700
-                          : Colors.orange.shade700,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  Text(
-                    '${_calculateTotalCalories(diets)} total calories',
-                    style: TextStyle(
-                      color: Colors.grey.shade600,
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        ],
+        );
+      }).toList(),
+      options: CarouselOptions(
+        height: 200,
+        enlargeCenterPage: true,
+        autoPlay: true,
+        viewportFraction: 0.9, // Full width items
+        // Remove end padding
       ),
     );
   }
 
-  // Progress Tab Widgets
-  Widget _buildProgressTab(UserProfile profile) {
-    return SingleChildScrollView(
+  ImageProvider _getFeaturedRecipeImageProvider(Recipe recipe) {
+    if (recipe.imageUrl != null && recipe.imageUrl!.isNotEmpty) {
+      try {
+        // Validate the URL first
+        final uri = Uri.parse(recipe.imageUrl!);
+        if (uri.isAbsolute) {
+          return NetworkImage(recipe.imageUrl!);
+        }
+      } catch (e) {
+        // Fall through to asset image if URL is invalid
+      }
+    }
+    return AssetImage(recipe.assetPath);
+  }
+
+  Widget _buildRecommendedRecipes(UserProfile profile) {
+    final recommendedRecipes = _getRecommendedRecipes(profile);
+
+    return ListView.builder(
       padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
-          const Text(
-            'Your Progress Overview',
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-              color: Colors.green,
+      itemCount: recommendedRecipes.length,
+      itemBuilder: (context, index) {
+        final recipe = recommendedRecipes[index];
+        return _buildRecipeCard(recipe, profile);
+      },
+    );
+  }
+
+  Widget _buildFavoriteRecipes() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: _favoriteRecipesStream,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+          return const Center(
+            child: Text('No favorite recipes yet'),
+          );
+        }
+
+        return ListView.builder(
+          padding: const EdgeInsets.all(16),
+          itemCount: snapshot.data!.docs.length,
+          itemBuilder: (context, index) {
+            final doc = snapshot.data!.docs[index];
+            final recipe = Recipe.fromMap(doc.data() as Map<String, dynamic>);
+            return _buildRecipeCard(recipe, UserProfile(
+              name: '',
+              age: 0,
+              height: 0,
+              weight: 0,
+              activities: [],
+              goals: [],
+              diets: [],
+              conditions: [],
+            ));
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildRecipeCategories(UserProfile profile) {
+    final categories = [
+      'Breakfast',
+      'Lunch',
+      'Dinner',
+      'Snacks',
+      'Vegetarian',
+      'High Protein',
+      'Low Carb',
+      'Quick Meals'
+    ];
+
+    return GridView.builder(
+      padding: const EdgeInsets.all(16),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 16,
+        childAspectRatio: 1.5,
+      ),
+      itemCount: categories.length,
+      itemBuilder: (context, index) {
+        return Card(
+          elevation: 4,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: () => _showCategoryRecipes(categories[index], profile),
+            child: Center(
+              child: Text(
+                categories[index],
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
           ),
-          const SizedBox(height: 20),
+        );
+      },
+    );
+  }
 
-          // Weekly Summary Cards
-          _buildWeeklySummaryCards(),
-          const SizedBox(height: 20),
+  Widget _buildRecipeCard(Recipe recipe, UserProfile profile) {
+    return Card(
+      elevation: 4,
+      margin: const EdgeInsets.only(bottom: 16),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => _showRecipeDetails(recipe, profile),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ClipRRect(
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(16),
+              ),
+              child: Container(
+                height: 150,
+                width: double.infinity,
+                child: recipe.imageUrl != null && recipe.imageUrl!.isNotEmpty
+                    ? Image.network(
+                  recipe.imageUrl!,
+                  height: 150,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) => _buildAssetImage(recipe),
+                )
+                    : _buildAssetImage(recipe),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        recipe.name,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          recipe.isFavorite ? Icons.favorite : Icons.favorite_border,
+                          color: recipe.isFavorite ? Colors.red : Colors.grey,
+                        ),
+                        onPressed: () => _toggleFavorite(recipe),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    recipe.description,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Icon(Icons.timer, size: 16, color: Colors.grey.shade600),
+                      const SizedBox(width: 4),
+                      Text('${recipe.prepTime} min'),
+                      const SizedBox(width: 16),
+                      Icon(Icons.local_fire_department, size: 16, color: Colors.grey.shade600),
+                      const SizedBox(width: 4),
+                      Text('${recipe.calories} cal'),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: recipe.tags.map((tag) => Chip(
+                      label: Text(tag),
+                      backgroundColor: Colors.green.shade100,
+                    )).toList(),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-          // Activity Progress Chart
-          _buildActivityProgressChart(),
-          const SizedBox(height: 20),
-
-          // Nutrition Progress Chart
-          _buildNutritionProgressChart(),
-          const SizedBox(height: 20),
-
-          // Recent Activities
-          _buildRecentActivitiesSection(),
-          const SizedBox(height: 20),
-
-          // Recent Meals
-          _buildRecentMealsSection(),
-        ],
+  Widget _buildAssetImage(Recipe recipe) {
+    return Image.asset(
+      recipe.assetPath,
+      height: 150,
+      width: double.infinity,
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) => Container(
+        height: 150,
+        color: Colors.grey[200],
+        child: const Center(
+          child: Icon(Icons.fastfood, size: 50, color: Colors.grey),
+        ),
       ),
     );
   }
@@ -1282,7 +1884,6 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
     );
   }
 
-// Data Methods
   Stream<List<Map<String, dynamic>>> _getWeeklyActivityStream() {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return Stream.value([]);
@@ -1298,7 +1899,6 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
       final weekStart = now.subtract(const Duration(days: 6));
       final weekEnd = now.add(const Duration(days: 1)); // Include today
 
-      // Initialize week data with all 7 days
       final weekData = List.generate(7, (index) {
         final date = weekStart.add(Duration(days: index));
         return {
@@ -1316,7 +1916,6 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
 
         final activityDate = timestamp.toDate();
 
-        // Skip if outside our week range
         if (activityDate.isBefore(weekStart) || activityDate.isAfter(weekEnd)) {
           continue;
         }
@@ -1356,7 +1955,6 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
       final weekStart = now.subtract(const Duration(days: 6));
       final weekEnd = now.add(const Duration(days: 1)); // Include today
 
-      // Initialize week data with all 7 days
       final weekData = List.generate(7, (index) {
         final date = weekStart.add(Duration(days: index));
         return {
@@ -1373,7 +1971,6 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
 
         final mealDate = timestamp.toDate();
 
-        // Skip if outside our week range
         if (mealDate.isBefore(weekStart) || mealDate.isAfter(weekEnd)) {
           continue;
         }
@@ -1413,7 +2010,6 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
     final weekEnd = now.add(const Duration(days: 1)); // Include today
 
     try {
-      // Get activities
       final activitiesSnapshot = await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
@@ -1422,7 +2018,6 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
           .where('completedAt', isLessThanOrEqualTo: Timestamp.fromDate(weekEnd))
           .get();
 
-      // Get meals
       final mealsSnapshot = await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
@@ -1431,12 +2026,10 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
           .where('completedAt', isLessThanOrEqualTo: Timestamp.fromDate(weekEnd))
           .get();
 
-      // Calculate calories burned
       final caloriesBurned = activitiesSnapshot.docs.fold<int>(0, (sum, doc) {
         return sum + (doc['caloriesBurned'] as int? ?? 0);
       });
 
-      // Calculate calories consumed
       final caloriesConsumed = mealsSnapshot.docs.fold<int>(0, (sum, doc) {
         return sum + (doc['calories'] as int? ?? 0);
       });
@@ -1457,6 +2050,7 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
       };
     }
   }
+
   Widget _buildProgressStats(UserProfile profile) {
     return Card(
       elevation: 4,
@@ -1526,7 +2120,6 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
     final weekStart = now.subtract(const Duration(days: 7));
 
     try {
-      // Get activities
       final activitiesSnapshot = await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
@@ -1534,7 +2127,6 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
           .where('completedAt', isGreaterThan: Timestamp.fromDate(weekStart))
           .get();
 
-      // Get meals
       final mealsSnapshot = await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
@@ -1542,7 +2134,6 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
           .where('completedAt', isGreaterThan: Timestamp.fromDate(weekStart))
           .get();
 
-      // Calculate calories
       final calories = activitiesSnapshot.docs.fold<int>(0, (sum, doc) {
         return sum + (doc['caloriesBurned'] as int? ?? 0);
       });
@@ -1581,127 +2172,199 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
     );
   }
 
-  // Settings Tab Widgets
-  Widget _buildSettingsTab(UserProfile profile) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        const Text(
-          'Profile Settings',
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 20),
-        ListTile(
-          leading: const Icon(Icons.person),
-          title: const Text('View Profile'),
-          onTap: () => _showProfileDetails(profile),
-        ),
-        const Divider(),
-        ListTile(
-          leading: const Icon(Icons.edit),
-          title: const Text('Edit Profile'),
-          onTap: () => _editProfile(profile),
-        ),
-        const Divider(),
-        ListTile(
-          leading: const Icon(Icons.delete, color: Colors.red),
-          title: const Text(
-            'Delete Profile',
-            style: TextStyle(color: Colors.red),
-          ),
-          onTap: () => _confirmDeleteProfile(),
-        ),
-        const Divider(),
-        ListTile(
-          leading: const Icon(Icons.logout),
-          title: const Text('Logout'),
-          onTap: () => _logout(),
-        ),
-      ],
-    );
-  }
+  List<Recipe> _getRecommendedRecipes(UserProfile profile) {
+    final allRecipes = [
+      Recipe(
+        id: '1',
+        name: 'Quinoa Salad',
+        description: 'Healthy quinoa salad with vegetables and lemon dressing',
+        assetPath: 'assets/quinoa-salad.jpg',
+        prepTime: 15,
+        calories: 320,
+        ingredients: [
+          '1 cup quinoa',
+          '2 cups water',
+          '1 cucumber, diced',
+          '1 bell pepper, diced',
+          '1/4 cup olive oil',
+          'Juice of 1 lemon',
+          'Salt and pepper to taste'
+        ],
+        instructions: [
+          'Rinse quinoa under cold water',
+          'Cook quinoa in water for 15 minutes',
+          'Let quinoa cool',
+          'Mix with vegetables',
+          'Whisk together olive oil and lemon juice',
+          'Pour dressing over salad and toss',
+          'Season with salt and pepper'
+        ],
+        nutritionalInfo: {
+          'protein': 12,
+          'carbs': 45,
+          'fats': 10,
+          'fiber': 8,
+          'sugar': 5,
+        },
+        tags: ['Vegetarian', 'Healthy', 'Quick'],
+        possibleSubstitutions: profile.diets.contains('Gluten-free')
+            ? ['Use gluten-free soy sauce']
+            : null,
+      ),
+      Recipe(
+        id: '2',
+        name: 'Grilled Chicken',
+        description: 'Juicy grilled chicken with herbs and vegetables',
+        assetPath: 'assets/grilled-chicken.jpg',
+        prepTime: 30,
+        calories: 450,
+        ingredients: [
+          '2 chicken breasts',
+          '2 tbsp olive oil',
+          '1 tsp garlic powder',
+          '1 tsp paprika',
+          '1/2 tsp salt',
+          '1/4 tsp black pepper',
+          '1 lemon, sliced'
+        ],
+        instructions: [
+          'Preheat grill to medium-high',
+          'Mix spices with olive oil',
+          'Coat chicken with spice mixture',
+          'Grill for 6-8 minutes per side',
+          'Add lemon slices last 2 minutes',
+          'Let rest 5 minutes before serving'
+        ],
+        nutritionalInfo: {
+          'protein': 35,
+          'carbs': 5,
+          'fats': 20,
+          'fiber': 2,
+          'sugar': 1,
+        },
+        tags: ['High Protein', 'Low Carb', 'Grilled'],
+        possibleSubstitutions: profile.diets.contains('Vegetarian')
+            ? ['Use portobello mushrooms instead of chicken']
+            : null,
+      ),
+      Recipe(
+        id: '3',
+        name: 'Avocado Toast',
+        description: 'Simple and nutritious avocado toast',
+        assetPath: 'assets/avocado-toast.jpg',
+        prepTime: 5,
+        calories: 250,
+        ingredients: [
+          '2 slices whole grain bread',
+          '1 ripe avocado',
+          '1 tbsp lemon juice',
+          'Salt and pepper to taste',
+          'Red pepper flakes (optional)'
+        ],
+        instructions: [
+          'Toast the bread',
+          'Mash the avocado with lemon juice, salt, and pepper',
+          'Spread the avocado mixture on toast',
+          'Sprinkle with red pepper flakes if desired'
+        ],
+        nutritionalInfo: {
+          'protein': 6,
+          'carbs': 25,
+          'fats': 15,
+          'fiber': 10,
+          'sugar': 2,
+        },
+        tags: ['Breakfast', 'Quick', 'Vegetarian'],
+        possibleSubstitutions: profile.diets.contains('Gluten-free')
+            ? ['Use gluten-free bread']
+            : null,
+      ),
+      Recipe(
+        id: '4',
+        name: 'Vegetable Stir Fry',
+        description: 'Colorful vegetable stir fry with tofu',
+        assetPath: 'assets/stir-fry.jpg',
+        prepTime: 20,
+        calories: 350,
+        ingredients: [
+          '1 block firm tofu, cubed',
+          '2 cups mixed vegetables (bell peppers, broccoli, carrots)',
+          '2 tbsp soy sauce',
+          '1 tbsp sesame oil',
+          '1 tsp ginger, minced',
+          '1 tsp garlic, minced'
+        ],
+        instructions: [
+          'Press tofu to remove excess water',
+          'Heat oil in a pan and add tofu, cook until golden',
+          'Remove tofu and add vegetables',
+          'Stir fry vegetables until tender-crisp',
+          'Add ginger and garlic, cook for 1 minute',
+          'Return tofu to pan, add soy sauce',
+          'Stir to combine and serve'
+        ],
+        nutritionalInfo: {
+          'protein': 18,
+          'carbs': 20,
+          'fats': 12,
+          'fiber': 6,
+          'sugar': 5,
+        },
+        tags: ['Vegetarian', 'Dinner', 'High Protein'],
+        possibleSubstitutions: profile.diets.contains('Gluten-free')
+            ? ['Use tamari instead of soy sauce']
+            : null,
+      ),
+    ];
 
-  // Helper Methods
-  String _getWelcomeMessage(UserProfile profile) {
-    if (profile.goals.contains('Weight loss')) {
-      return "Let's work together to achieve your weight loss goals!";
-    } else if (profile.goals.contains('Muscle gain')) {
-      return "Ready to build some muscle? We've got your back!";
-    } else if (profile.goals.contains('Maintain weight')) {
-      return "We'll help you maintain your current weight healthily.";
-    } else if (profile.goals.contains('Improve fitness')) {
-      return "Let's improve your fitness level together!";
-    } else if (profile.goals.contains('Manage health condition')) {
-      return "We'll help you manage your health effectively.";
-    } else {
-      return "Stay healthy and active with our personalized recommendations.";
-    }
-  }
+    return allRecipes.where((recipe) {
+      if (profile.diets.contains('Vegetarian') &&
+          !recipe.tags.contains('Vegetarian')) {
+        return false;
+      }
 
-  double _calculateGoalProgress(UserProfile profile) {
-    if (profile.targetWeight == null || profile.goalDate == null) return 0.0;
-    final totalDays = profile.goalDate!.difference(DateTime.now()).inDays;
-    final daysPassed = DateTime.now().difference(profile.createdAt).inDays;
-    if (totalDays <= 0 || daysPassed <= 0) return 0.0;
-    return (daysPassed / totalDays).clamp(0.0, 1.0);
-  }
+      if (profile.diets.contains('Gluten-free') &&
+          recipe.tags.contains('Contains Gluten')) {
+        return false;
+      }
 
-  Widget _buildHealthMetric(String title, String value, String subtitle, Color color) {
-    return Column(
-      children: [
-        Text(
-          title,
-          style: TextStyle(
-            fontSize: 14,
-            color: Colors.grey.shade600,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
-        ),
-        Text(
-          subtitle,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey.shade500,
-          ),
-        ),
-      ],
-    );
-  }
+      if (profile.conditions.contains('Diabetes') &&
+          (recipe.nutritionalInfo['sugar'] > 10)) {
+        return false;
+      }
 
-  String _getBmiCategory(double bmi) {
-    if (bmi < 18.5) return 'Underweight';
-    if (bmi < 25) return 'Normal weight';
-    if (bmi < 30) return 'Overweight';
-    return 'Obese';
-  }
+      if (profile.goals.contains('Weight loss') &&
+          (recipe.calories > 400)) {
+        return false;
+      }
 
-  Color _getBmiColor(double bmi) {
-    if (bmi < 18.5) return Colors.blue;
-    if (bmi < 25) return Colors.green;
-    if (bmi < 30) return Colors.orange;
-    return Colors.red;
+      if (profile.goals.contains('Muscle gain') &&
+          (recipe.nutritionalInfo['protein'] < 20)) {
+        return false;
+      }
+
+      return true;
+    }).toList();
   }
 
   List<Diet> _getRecommendedDiets(UserProfile profile) {
     final List<Diet> diets = [];
 
-    // Base diet plan
     diets.add(Diet(
       id: 'breakfast1',
       mealTime: 'Breakfast',
       description: 'Oatmeal with berries and nuts',
       calories: 350,
+      nutritionalInfo: {
+        'protein': 12,
+        'carbs': 45,
+        'fats': 10,
+        'fiber': 8,
+        'sugar': 15,
+      },
+      ingredientSubstitutions: profile.conditions.contains('Diabetes')
+          ? ['Use sugar-free sweetener instead of honey', 'Add chia seeds for extra fiber']
+          : null,
     ));
 
     diets.add(Diet(
@@ -1709,6 +2372,16 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
       mealTime: 'Lunch',
       description: 'Grilled chicken with quinoa and steamed vegetables',
       calories: 450,
+      nutritionalInfo: {
+        'protein': 35,
+        'carbs': 40,
+        'fats': 12,
+        'fiber': 6,
+        'sugar': 5,
+      },
+      ingredientSubstitutions: profile.diets.contains('Vegetarian')
+          ? ['Replace chicken with tofu or tempeh']
+          : null,
     ));
 
     diets.add(Diet(
@@ -1716,6 +2389,16 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
       mealTime: 'Snack',
       description: 'Greek yogurt with honey and almonds',
       calories: 200,
+      nutritionalInfo: {
+        'protein': 15,
+        'carbs': 20,
+        'fats': 8,
+        'fiber': 2,
+        'sugar': 12,
+      },
+      ingredientSubstitutions: profile.diets.contains('Dairy-free')
+          ? ['Use coconut yogurt instead of Greek yogurt']
+          : null,
     ));
 
     diets.add(Diet(
@@ -1723,79 +2406,132 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
       mealTime: 'Dinner',
       description: 'Salmon with sweet potato and asparagus',
       calories: 500,
+      nutritionalInfo: {
+        'protein': 30,
+        'carbs': 35,
+        'fats': 20,
+        'fiber': 7,
+        'sugar': 8,
+      },
+      ingredientSubstitutions: profile.diets.contains('Vegetarian')
+          ? ['Replace salmon with grilled portobello mushrooms']
+          : null,
     ));
 
-    // Adjust for vegetarian preference
     if (profile.diets.contains('Vegetarian')) {
       diets[1] = Diet(
         id: 'lunch2',
         mealTime: 'Lunch',
         description: 'Lentil curry with brown rice',
         calories: 400,
+        nutritionalInfo: {
+          'protein': 18,
+          'carbs': 60,
+          'fats': 8,
+          'fiber': 12,
+          'sugar': 5,
+        },
       );
       diets[3] = Diet(
         id: 'dinner2',
         mealTime: 'Dinner',
         description: 'Tofu stir-fry with mixed vegetables',
         calories: 450,
+        nutritionalInfo: {
+          'protein': 20,
+          'carbs': 30,
+          'fats': 15,
+          'fiber': 8,
+          'sugar': 6,
+        },
       );
     }
 
-    // Adjust for weight loss goal
     if (profile.goals.contains('Weight loss')) {
       diets[0] = Diet(
         id: 'breakfast2',
         mealTime: 'Breakfast',
         description: 'Egg whites with spinach and whole grain toast',
         calories: 300,
+        nutritionalInfo: {
+          'protein': 20,
+          'carbs': 25,
+          'fats': 5,
+          'fiber': 4,
+          'sugar': 2,
+        },
       );
       diets[2] = Diet(
         id: 'snack2',
         mealTime: 'Snack',
         description: 'Apple with almond butter',
         calories: 150,
+        nutritionalInfo: {
+          'protein': 4,
+          'carbs': 20,
+          'fats': 8,
+          'fiber': 4,
+          'sugar': 15,
+        },
       );
     }
 
-    // Adjust for muscle gain goal
     if (profile.goals.contains('Muscle gain')) {
       diets[1] = Diet(
         id: 'lunch3',
         mealTime: 'Lunch',
         description: 'Grilled chicken with brown rice and broccoli',
         calories: 550,
+        nutritionalInfo: {
+          'protein': 45,
+          'carbs': 50,
+          'fats': 12,
+          'fiber': 6,
+          'sugar': 3,
+        },
       );
       diets.add(Diet(
         id: 'snack3',
         mealTime: 'Post-Workout',
         description: 'Protein shake with banana',
         calories: 300,
+        nutritionalInfo: {
+          'protein': 30,
+          'carbs': 35,
+          'fats': 5,
+          'fiber': 3,
+          'sugar': 20,
+        },
       ));
     }
 
-    // Adjust for maintain weight goal
-    if (profile.goals.contains('Maintain weight')) {
-      diets[0] = Diet(
-        id: 'breakfast3',
-        mealTime: 'Breakfast',
-        description: 'Whole grain toast with avocado and eggs',
-        calories: 400,
-      );
-    }
-
-    // Adjust for diabetes condition
     if (profile.conditions.contains('Diabetes')) {
       diets[0] = Diet(
         id: 'breakfast4',
         mealTime: 'Breakfast',
         description: 'Scrambled eggs with avocado and whole grain toast',
         calories: 350,
+        nutritionalInfo: {
+          'protein': 18,
+          'carbs': 20,
+          'fats': 20,
+          'fiber': 8,
+          'sugar': 2,
+        },
+        ingredientSubstitutions: ['Use whole grain or low-carb bread'],
       );
       diets[2] = Diet(
         id: 'snack4',
         mealTime: 'Snack',
         description: 'Handful of nuts and cheese cubes',
         calories: 200,
+        nutritionalInfo: {
+          'protein': 10,
+          'carbs': 5,
+          'fats': 15,
+          'fiber': 3,
+          'sugar': 1,
+        },
       );
     }
 
@@ -1876,63 +2612,117 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
     );
   }
 
-  void _showMealDetails(Diet meal, UserProfile profile) {
+  void _showMealDetailsWithNutrition(Diet meal, UserProfile profile) {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                meal.mealTime,
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
+        return SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  meal.mealTime,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                meal.description,
-                style: const TextStyle(fontSize: 16),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                'Calories: ${meal.calories}',
-                style: const TextStyle(fontSize: 16),
-              ),
-              const SizedBox(height: 20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  ElevatedButton(
-                    onPressed: () => Navigator.pop(context),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.grey.shade300,
-                      foregroundColor: Colors.black,
-                    ),
-                    child: const Text('Close'),
-                  ),
-                  ElevatedButton(
-                    onPressed: () {
-                      _markMealCompleted(meal);
-                      Navigator.pop(context);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green.shade300,
-                      foregroundColor: Colors.white,
-                    ),
-                    child: const Text('Mark as Completed'),
+                const SizedBox(height: 16),
+                Text(
+                  meal.description,
+                  style: const TextStyle(fontSize: 16),
+                ),
+                const SizedBox(height: 16),
 
+                const Text(
+                  'Nutritional Information',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
                   ),
-                ],
-              ),
-            ],
+                ),
+                const SizedBox(height: 8),
+                if (meal.nutritionalInfo != null)
+                  Column(
+                    children: [
+                      _buildNutritionRow('Calories', '${meal.calories} kcal'),
+                      _buildNutritionRow('Protein', '${meal.nutritionalInfo!['protein']}g'),
+                      _buildNutritionRow('Carbs', '${meal.nutritionalInfo!['carbs']}g'),
+                      _buildNutritionRow('Fats', '${meal.nutritionalInfo!['fats']}g'),
+                      _buildNutritionRow('Fiber', '${meal.nutritionalInfo!['fiber']}g'),
+                      _buildNutritionRow('Sugar', '${meal.nutritionalInfo!['sugar']}g'),
+                    ],
+                  ),
+                const SizedBox(height: 16),
+
+                if (meal.ingredientSubstitutions != null && meal.ingredientSubstitutions!.isNotEmpty)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Suggested Substitutions',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      ...meal.ingredientSubstitutions!.map((sub) =>
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Text('• $sub'),
+                          ),
+                      ),
+                    ],
+                  ),
+                const SizedBox(height: 20),
+
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.grey.shade300,
+                        foregroundColor: Colors.black,
+                      ),
+                      child: const Text('Close'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        _markMealCompleted(meal);
+                        Navigator.pop(context);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green.shade300,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('Mark as Completed'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         );
       },
+    );
+  }
+
+  Widget _buildNutritionRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+        ],
+      ),
     );
   }
 
@@ -1955,7 +2745,6 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
           .collection('completedActivities')
           .add(completedActivity);
 
-      // Force a refresh of the streams
       setState(() {
         _completedActivitiesStream = FirebaseFirestore.instance
             .collection('users')
@@ -1994,7 +2783,6 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
           .collection('completedMeals')
           .add(completedMeal);
 
-      // Force a refresh of the streams
       setState(() {
         _completedMealsStream = FirebaseFirestore.instance
             .collection('users')
@@ -2013,6 +2801,101 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
       );
     }
   }
+
+  Future<void> _toggleFavorite(Recipe recipe) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      if (recipe.isFavorite) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .collection('favoriteRecipes')
+            .doc(recipe.id)
+            .delete();
+      } else {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .collection('favoriteRecipes')
+            .doc(recipe.id)
+            .set(recipe.toMap());
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to update favorites: $e')),
+      );
+    }
+  }
+
+  void _showRecipeSearch(UserProfile profile) {
+    showSearch(
+      context: context,
+      delegate: RecipeSearchDelegate(profile: profile),
+    );
+  }
+
+  void _showCategoryRecipes(String category, UserProfile profile) {
+    final recipes = _getRecommendedRecipes(profile)
+        .where((recipe) => recipe.tags.contains(category))
+        .toList();
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => Scaffold(
+          appBar: AppBar(
+            title: Text(category),
+          ),
+          body: ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: recipes.length,
+            itemBuilder: (context, index) {
+              return _buildRecipeCard(recipes[index], profile);
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showAddRecipeDialog(UserProfile profile) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Custom Recipe'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                decoration: const InputDecoration(labelText: 'Recipe Name'),
+                onChanged: (value) {},
+              ),
+              TextField(
+                decoration: const InputDecoration(labelText: 'Description'),
+                onChanged: (value) {},
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showProfileDetails(UserProfile profile) {
     showDialog(
       context: context,
@@ -2103,9 +2986,146 @@ class _DynamicHomeScreenState extends State<DynamicHomeScreen> {
       );
     }
   }
+
+  String _getWelcomeMessage(UserProfile profile) {
+    if (profile.goals.contains('Weight loss')) {
+      return "Let's work together to achieve your weight loss goals!";
+    } else if (profile.goals.contains('Muscle gain')) {
+      return "Ready to build some muscle? We've got your back!";
+    } else if (profile.goals.contains('Maintain weight')) {
+      return "We'll help you maintain your current weight healthily.";
+    } else if (profile.goals.contains('Improve fitness')) {
+      return "Let's improve your fitness level together!";
+    } else if (profile.goals.contains('Manage health condition')) {
+      return "We'll help you manage your health effectively.";
+    } else {
+      return "Stay healthy and active with our personalized recommendations.";
+    }
+  }
+
+  double _calculateGoalProgress(UserProfile profile) {
+    if (profile.targetWeight == null || profile.goalDate == null) return 0.0;
+    final totalDays = profile.goalDate!.difference(DateTime.now()).inDays;
+    final daysPassed = DateTime.now().difference(profile.createdAt).inDays;
+    if (totalDays <= 0 || daysPassed <= 0) return 0.0;
+    return (daysPassed / totalDays).clamp(0.0, 1.0);
+  }
+
+  Widget _buildHealthMetric(String title, String value, String subtitle, Color color) {
+    return Column(
+      children: [
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 14,
+            color: Colors.grey.shade600,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        Text(
+          subtitle,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey.shade500,
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _getBmiCategory(double bmi) {
+    if (bmi < 18.5) return 'Underweight';
+    if (bmi < 25) return 'Normal weight';
+    if (bmi < 30) return 'Overweight';
+    return 'Obese';
+  }
+
+  Color _getBmiColor(double bmi) {
+    if (bmi < 18.5) return Colors.blue;
+    if (bmi < 25) return Colors.green;
+    if (bmi < 30) return Colors.orange;
+    return Colors.red;
+  }
 }
 
-// Model Classes
+class RecipeSearchDelegate extends SearchDelegate {
+  final UserProfile profile;
+
+  RecipeSearchDelegate({required this.profile});
+
+  @override
+  List<Widget> buildActions(BuildContext context) {
+    return [
+      IconButton(
+        icon: const Icon(Icons.clear),
+        onPressed: () {
+          query = '';
+        },
+      ),
+    ];
+  }
+
+  @override
+  Widget buildLeading(BuildContext context) {
+    return IconButton(
+      icon: const Icon(Icons.arrow_back),
+      onPressed: () {
+        close(context, null);
+      },
+    );
+  }
+
+  @override
+  Widget buildResults(BuildContext context) {
+    final recipes = _DynamicHomeScreenState()._getRecommendedRecipes(profile)
+        .where((recipe) => recipe.name.toLowerCase().contains(query.toLowerCase()))
+        .toList();
+
+    return ListView.builder(
+      itemCount: recipes.length,
+      itemBuilder: (context, index) {
+        final recipe = recipes[index];
+        return ListTile(
+          title: Text(recipe.name),
+          subtitle: Text(recipe.description),
+          onTap: () {
+            _DynamicHomeScreenState()._showRecipeDetails(recipe, profile);
+          },
+        );
+      },
+    );
+  }
+
+  @override
+  Widget buildSuggestions(BuildContext context) {
+    final recipes = _DynamicHomeScreenState()._getRecommendedRecipes(profile)
+        .where((recipe) => recipe.name.toLowerCase().contains(query.toLowerCase()))
+        .toList();
+
+    return ListView.builder(
+      itemCount: recipes.length,
+      itemBuilder: (context, index) {
+        final recipe = recipes[index];
+        return ListTile(
+          title: Text(recipe.name),
+          subtitle: Text(recipe.description),
+          onTap: () {
+            _DynamicHomeScreenState()._showRecipeDetails(recipe, profile);
+          },
+        );
+      },
+    );
+  }
+}
+
 class UserProfile {
   final String name;
   final String? email;
@@ -2186,11 +3206,85 @@ class Diet {
   final String mealTime;
   final String description;
   final int calories;
+  final Map<String, dynamic>? nutritionalInfo;
+  final List<String>? ingredientSubstitutions;
 
   Diet({
     required this.id,
     required this.mealTime,
     required this.description,
     required this.calories,
+    this.nutritionalInfo,
+    this.ingredientSubstitutions,
   });
+}
+
+class Recipe {
+  final String id;
+  final String name;
+  final String description;
+  final String? imageUrl;
+  final String assetPath;
+  final int prepTime;
+  final int calories;
+  final List<String> ingredients;
+  final List<String> instructions;
+  final Map<String, dynamic> nutritionalInfo;
+  final List<String> tags;
+  final List<String>? possibleSubstitutions;
+  bool isFavorite;
+
+  Recipe({
+    required this.id,
+    required this.name,
+    required this.description,
+    this.imageUrl = '',
+    required this.assetPath,
+    required this.prepTime,
+    required this.calories,
+    required this.ingredients,
+    required this.instructions,
+    required this.nutritionalInfo,
+    required this.tags,
+    this.possibleSubstitutions,
+    this.isFavorite = false,
+  });
+
+  factory Recipe.fromMap(Map<String, dynamic> map) {
+    return Recipe(
+      id: map['id'],
+      name: map['name'],
+      description: map['description'],
+      imageUrl: map['imageUrl'],
+      assetPath: map['assetPath'] ?? 'assets/default_recipe.png',
+      prepTime: map['prepTime'],
+      calories: map['calories'],
+      ingredients: List<String>.from(map['ingredients']),
+      instructions: List<String>.from(map['instructions']),
+      nutritionalInfo: Map<String, dynamic>.from(map['nutritionalInfo']),
+      tags: List<String>.from(map['tags']),
+      possibleSubstitutions: map['possibleSubstitutions'] != null
+          ? List<String>.from(map['possibleSubstitutions'])
+          : null,
+      isFavorite: map['isFavorite'] ?? false,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'name': name,
+      'description': description,
+      'imageUrl': imageUrl,
+      'assetPath': assetPath,
+      'prepTime': prepTime,
+      'calories': calories,
+      'ingredients': ingredients,
+      'instructions': instructions,
+      'nutritionalInfo': nutritionalInfo,
+      'tags': tags,
+      'possibleSubstitutions': possibleSubstitutions,
+      'isFavorite': isFavorite,
+    };
+  }
 }
